@@ -1,0 +1,98 @@
+name: esp-idf
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_path:
+        description: 'ESP-IDF 工程路径（相对仓库根）'
+        required: false
+        default: 'examples/hello'
+      target:
+        description: '芯片目标'
+        required: false
+        default: 'esp32s3'
+        type: choice
+        options:
+          - esp32s3
+          - esp32
+          - esp32c3
+          - esp32c6
+          - esp32s2
+          - esp32h2
+      idf_version:
+        description: 'ESP-IDF 版本（Docker tag）'
+        required: false
+        default: 'v5.3.2'
+      build_command:
+        description: '构建命令'
+        required: false
+        default: 'idf.py build'
+      timeout_minutes:
+        description: '超时分钟数（上限 360）'
+        required: false
+        default: '60'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        shell: bash
+        run: |
+          echo "工程路径 : ${{ inputs.project_path }}"
+          echo "目标芯片 : ${{ inputs.target }}"
+          echo "IDF 版本 : ${{ inputs.idf_version }}"
+          echo "构建命令 : ${{ inputs.build_command }}"
+          echo "开始时间 : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "CPU 核心 : $(nproc)"
+          docker --version
+
+      - name: 拉取 ESP-IDF 镜像
+        shell: bash
+        run: |
+          time docker pull "espressif/idf:${{ inputs.idf_version }}"
+
+      - name: 编译固件
+        shell: bash
+        env:
+          PROJECT_PATH: ${{ inputs.project_path }}
+          TARGET: ${{ inputs.target }}
+          IDF_VER: ${{ inputs.idf_version }}
+          BUILD_CMD: ${{ inputs.build_command }}
+        run: |
+          set -e
+          docker run --rm \
+            -v "$PWD:/project" \
+            -w "/project/$PROJECT_PATH" \
+            "espressif/idf:$IDF_VER" \
+            bash -c "idf.py set-target $TARGET && $BUILD_CMD"
+
+      - name: 列出构建产物
+        if: always()
+        shell: bash
+        env:
+          PROJECT_PATH: ${{ inputs.project_path }}
+        run: |
+          echo "--- build 目录 ---"
+          ls -la "$PROJECT_PATH/build" 2>/dev/null || echo "(没有 build 目录)"
+          echo "--- 固件体积 ---"
+          du -sh "$PROJECT_PATH/build" 2>/dev/null || true
+
+      - name: 上传固件产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ inputs.target }}
+          path: |
+            ${{ inputs.project_path }}/build/*.bin
+            ${{ inputs.project_path }}/build/*.elf
+            ${{ inputs.project_path }}/build/*.map
+            ${{ inputs.project_path }}/build/bootloader/*.bin
+            ${{ inputs.project_path }}/build/partition_table/*.bin
+            ${{ inputs.project_path }}/build/flasher_args.json
+          if-no-files-found: warn
+          retention-days: 7
