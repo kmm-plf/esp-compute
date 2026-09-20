@@ -1,0 +1,77 @@
+name: compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_name:
+        description: '任务名（会用作产物名）'
+        required: false
+        default: 'adhoc'
+      runner:
+        description: '运行环境'
+        required: false
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+      timeout_minutes:
+        description: '超时分钟数（上限 360）'
+        required: false
+        default: '60'
+      script:
+        description: '要执行的 shell 脚本'
+        required: true
+        default: |
+          set -e
+          echo "=== 环境 ==="
+          uname -a
+          echo "CPU 核心: $(nproc)"
+          df -h /
+          echo "=== 干活 ==="
+          python3 -c "print('sum =', sum(i*i for i in range(10**7)))"
+          mkdir -p out
+          echo "示例产物 $(date -u)" > out/hello.txt
+          echo "=== 完成 ==="
+
+jobs:
+  run:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        shell: bash
+        run: |
+          echo "runner   : ${{ inputs.runner }}"
+          echo "job_name : ${{ inputs.job_name }}"
+          echo "开始时间 : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "CPU 核心 : $(nproc)"
+          df -h /
+
+      - name: 执行脚本
+        shell: bash
+        env:
+          JOB_SCRIPT: ${{ inputs.script }}
+        run: |
+          mkdir -p .compute
+          printf '%s\n' "$JOB_SCRIPT" > .compute/job.sh
+          echo "----- 脚本内容 -----"
+          cat .compute/job.sh
+          echo "----- 开始执行 -----"
+          bash .compute/job.sh 2>&1 | tee .compute/output.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: 上传产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: output-${{ inputs.job_name }}
+          path: |
+            .compute/output.log
+            out/**
+          if-no-files-found: warn
+          retention-days: 7
